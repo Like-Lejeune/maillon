@@ -309,6 +309,22 @@ paths:
       responses:
         '204': { description: Machine retirée. }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/earnings:
+    get:
+      tags: [Fournisseur]
+      summary: Mes gains par machine sur une période
+      operationId: getEarnings
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: Une ligne par machine ayant terminé au moins une tâche sur la période.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EarningsRow' }
   /api/payouts:
     get:
       tags: [Fournisseur]
@@ -427,6 +443,10 @@ paths:
       operationId: adminListUsers
       parameters:
         - { name: role, in: query, schema: { type: string, enum: [client, provider, admin] } }
+        - name: q
+          in: query
+          description: Recherche sur le début de l'e-mail ou du nom, insensible à la casse.
+          schema: { type: string, minLength: 2 }
       responses:
         '200':
           description: Utilisateurs avec leur solde.
@@ -838,6 +858,16 @@ components:
         prompt_tokens: { type: integer }
         completion_tokens: { type: integer }
         cost: { type: integer }
+
+    EarningsRow:
+      type: object
+      required: [machine_id, machine_name, jobs, compute_ms, earned]
+      properties:
+        machine_id: { type: string, format: uuid }
+        machine_name: { type: string }
+        jobs: { type: integer, description: Tâches réussies et rémunérées. }
+        compute_ms: { type: integer }
+        earned: { type: integer, description: Micro-crédits gagnés. }
 
     MachineStatus:
       type: string

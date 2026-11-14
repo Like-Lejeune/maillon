@@ -1,0 +1,36 @@
+# Proxy HTTPS unique du VPS. Seul conteneur exposé sur Internet (ports 80 et 443).
+# Il obtient et renouvelle les certificats tout seul, et route chaque domaine
+# vers le serveur de l'environnement correspondant.
+#
+#   docker network create maillon_edge        (une seule fois)
+#   docker compose -p maillon-edge --env-file /srv/maillon/edge/.env up -d
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL manquant}
+      STAGING_DOMAIN: ${STAGING_DOMAIN:?STAGING_DOMAIN manquant}
+      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN manquant}
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN manquant}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - /srv/maillon/staging/web:/srv/web/staging:ro
+      - /srv/maillon/production/web:/srv/web/production:ro
+    networks:
+      - edge
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  edge:
+    name: maillon_edge
+    external: true

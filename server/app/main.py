@@ -1,7 +1,6 @@
 """Point d'entrée du serveur Maillon.
 
-Ce socle n'expose que les contrôles de santé. Les routes du contrat
-(docs/openapi.yaml) s'ajoutent tâche par tâche.
+Les routes du contrat (docs/openapi.yaml) s'ajoutent tâche par tâche.
 """
 
 from contextlib import asynccontextmanager
@@ -10,15 +9,18 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
+from app.errors import install_error_handlers
+from app.routers import auth
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    app.state.session_factory = async_sessionmaker(app.state.engine, expire_on_commit=False)
     app.state.redis = Redis.from_url(settings.redis_url, socket_connect_timeout=2)
     yield
     await app.state.redis.aclose()
@@ -27,12 +29,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="API Maillon",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
 )
+install_error_handlers(app)
+app.include_router(auth.router)
 
 
 @app.get("/health/live", include_in_schema=False)

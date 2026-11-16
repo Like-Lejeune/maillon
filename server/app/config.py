@@ -23,13 +23,28 @@ class Settings(BaseSettings):
 
     models_dir: str = "/models"
 
-    @property
-    def database_url(self) -> str:
+    # Sessions des interfaces web
+    session_ttl_hours: int = 24 * 7
+    # Protection contre les essais de mots de passe
+    login_max_failures: int = 5
+    login_lockout_minutes: int = 15
+
+    def _database_url(self, driver: str) -> str:
         password = quote(self.db_password, safe="")
         return (
-            f"postgresql+asyncpg://{self.db_user}:{password}"
+            f"postgresql+{driver}://{self.db_user}:{password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
+
+    @property
+    def database_url(self) -> str:
+        """Connexion asynchrone, utilisée par le serveur."""
+        return self._database_url("asyncpg")
+
+    @property
+    def database_url_sync(self) -> str:
+        """Connexion synchrone, utilisée par les migrations."""
+        return self._database_url("psycopg")
 
     @property
     def redis_url(self) -> str:

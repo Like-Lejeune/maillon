@@ -1,0 +1,944 @@
+openapi: 3.1.0
+info:
+  title: API Maillon
+  version: 1.0.0
+  description: |
+    Contrat d'API de la plateforme Maillon.
+
+    Trois familles de routes, avec trois modes d'authentification :
+
+    - **Inférence** (`/v1/...`) : compatible OpenAI, pour les clients.
+      Authentification par clé API (`Authorization: Bearer mk_live_...`).
+    - **Plateforme** (`/api/...`) : utilisée par les interfaces web client,
+      fournisseur et admin. Authentification par jeton de session.
+    - **Agent** (`/agent/...`) : utilisée par le programme installé sur les
+      machines. Authentification par jeton d'agent. Le canal temps réel est
+      décrit dans `docs/agent-protocol.md`.
+
+    Les montants sont des entiers en micro-crédits (1 crédit = 1 000 000).
+servers:
+  - url: https://api.example.com
+    description: Production
+  - url: https://staging.example.com
+    description: Préproduction
+tags:
+  - name: Inférence
+  - name: Authentification
+  - name: Client
+  - name: Fournisseur
+  - name: Admin
+  - name: Agent
+
+paths:
+  # ------------------------------------------------------------------ Inférence
+  /v1/chat/completions:
+    post:
+      tags: [Inférence]
+      summary: Générer une réponse (compatible OpenAI)
+      operationId: createChatCompletion
+      security: [{ apiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatCompletionRequest' }
+      responses:
+        '200':
+          description: |
+            Réponse complète (`stream: false`) ou flux d'événements
+            `text/event-stream` (`stream: true`) terminé par `data: [DONE]`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatCompletionResponse' }
+            text/event-stream:
+              schema:
+                type: string
+                description: 'Suite de lignes `data: {ChatCompletionChunk}`.'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402': { $ref: '#/components/responses/InsufficientCredits' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/NoCapacity' }
+  /v1/models:
+    get:
+      tags: [Inférence]
+      summary: Lister les modèles disponibles
+      operationId: listModels
+      security: [{ apiKey: [] }]
+      responses:
+        '200':
+          description: Liste des modèles actifs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object: { type: string, const: list }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Model' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ------------------------------------------------------------ Authentification
+  /api/auth/register:
+    post:
+      tags: [Authentification]
+      summary: Créer un compte client ou fournisseur
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name, role]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 10 }
+                name: { type: string }
+                role: { type: string, enum: [client, provider] }
+      responses:
+        '201':
+          description: Compte créé.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '409':
+          description: Adresse e-mail déjà utilisée.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/BadRequest' }
+  /api/auth/login:
+    post:
+      tags: [Authentification]
+      summary: Se connecter
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200':
+          description: Session ouverte.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/auth/logout:
+    post:
+      tags: [Authentification]
+      summary: Fermer la session
+      operationId: logout
+      responses:
+        '204': { description: Session fermée. }
+  /api/me:
+    get:
+      tags: [Authentification]
+      summary: Profil de l'utilisateur connecté
+      operationId: getMe
+      responses:
+        '200':
+          description: Profil.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # --------------------------------------------------------------------- Client
+  /api/api-keys:
+    get:
+      tags: [Client]
+      summary: Lister mes clés API
+      operationId: listApiKeys
+      responses:
+        '200':
+          description: Clés, sans leur valeur secrète.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ApiKey' }
+    post:
+      tags: [Client]
+      summary: Créer une clé API
+      description: La valeur complète de la clé n'est renvoyée qu'une seule fois.
+      operationId: createApiKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 80 }
+      responses:
+        '201':
+          description: Clé créée.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiKey'
+                  - type: object
+                    required: [key]
+                    properties:
+                      key: { type: string, examples: [mk_live_ab12cd34ef56] }
+  /api/api-keys/{id}:
+    delete:
+      tags: [Client]
+      summary: Révoquer une clé API
+      operationId: revokeApiKey
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '204': { description: 'Clé révoquée, refusée immédiatement.' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/balance:
+    get:
+      tags: [Client, Fournisseur]
+      summary: Mon solde
+      operationId: getBalance
+      responses:
+        '200':
+          description: Solde en micro-crédits.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Balance' }
+  /api/ledger:
+    get:
+      tags: [Client, Fournisseur]
+      summary: Historique de mes mouvements
+      operationId: listLedger
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Mouvements, du plus récent au plus ancien.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerPage'
+  /api/usage:
+    get:
+      tags: [Client]
+      summary: Ma consommation par jour et par modèle
+      operationId: getUsage
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: Consommation agrégée.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UsageRow' }
+
+  # ---------------------------------------------------------------- Fournisseur
+  /api/machines:
+    get:
+      tags: [Fournisseur]
+      summary: Lister mes machines
+      operationId: listMachines
+      responses:
+        '200':
+          description: Machines du fournisseur.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Machine' }
+    post:
+      tags: [Fournisseur]
+      summary: Déclarer une machine
+      description: |
+        Crée la machine au statut `pending` et renvoie un jeton d'inscription
+        à usage unique, à saisir lors de l'installation de l'agent.
+      operationId: createMachine
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 80 }
+      responses:
+        '201':
+          description: Machine déclarée.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [machine, enrollment_token]
+                properties:
+                  machine: { $ref: '#/components/schemas/Machine' }
+                  enrollment_token: { type: string }
+  /api/machines/{id}:
+    get:
+      tags: [Fournisseur]
+      summary: Détail d'une de mes machines
+      operationId: getMachine
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Machine.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Machine' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Fournisseur]
+      summary: Retirer une machine du réseau
+      operationId: deleteMachine
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '204': { description: Machine retirée. }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/earnings:
+    get:
+      tags: [Fournisseur]
+      summary: Mes gains par machine sur une période
+      operationId: getEarnings
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: Une ligne par machine ayant terminé au moins une tâche sur la période.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EarningsRow' }
+  /api/payouts:
+    get:
+      tags: [Fournisseur]
+      summary: Mes paiements reçus et en attente
+      operationId: listMyPayouts
+      responses:
+        '200':
+          description: Paiements.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Payout' }
+
+  # ---------------------------------------------------------------------- Admin
+  /api/admin/overview:
+    get:
+      tags: [Admin]
+      summary: Vue d'ensemble en direct
+      operationId: adminOverview
+      responses:
+        '200':
+          description: Compteurs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [machines_online, machines_total, jobs_queued, jobs_running, jobs_last_hour, failure_rate_last_hour]
+                properties:
+                  machines_online: { type: integer }
+                  machines_total: { type: integer }
+                  jobs_queued: { type: integer }
+                  jobs_running: { type: integer }
+                  jobs_last_hour: { type: integer }
+                  failure_rate_last_hour: { type: number }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/machines:
+    get:
+      tags: [Admin]
+      summary: Lister toutes les machines
+      operationId: adminListMachines
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/MachineStatus' } }
+        - { name: tier, in: query, schema: { $ref: '#/components/schemas/MachineTier' } }
+      responses:
+        '200':
+          description: Machines.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Machine' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/machines/{id}/suspend:
+    post:
+      tags: [Admin]
+      summary: Suspendre une machine
+      operationId: adminSuspendMachine
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Machine suspendue.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Machine' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/machines/{id}/reinstate:
+    post:
+      tags: [Admin]
+      summary: Réactiver une machine suspendue
+      operationId: adminReinstateMachine
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Machine réactivée.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Machine' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/jobs:
+    get:
+      tags: [Admin]
+      summary: Lister les tâches
+      operationId: adminListJobs
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/JobStatus' } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Tâches, sans le contenu des requêtes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Job' }
+                  next_cursor: { type: [string, 'null'] }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/users:
+    get:
+      tags: [Admin]
+      summary: Lister les utilisateurs
+      operationId: adminListUsers
+      parameters:
+        - { name: role, in: query, schema: { type: string, enum: [client, provider, admin] } }
+        - name: q
+          in: query
+          description: Recherche sur le début de l'e-mail ou du nom, insensible à la casse.
+          schema: { type: string, minLength: 2 }
+      responses:
+        '200':
+          description: Utilisateurs avec leur solde.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/User'
+                    - type: object
+                      properties:
+                        balance: { $ref: '#/components/schemas/Balance' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/admin/topups:
+    post:
+      tags: [Admin]
+      summary: Recharger les crédits d'un client
+      description: Utilisé après réception manuelle du paiement.
+      operationId: adminTopup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, amount]
+              properties:
+                user_id: { type: string, format: uuid }
+                amount: { type: integer, minimum: 1, description: Micro-crédits. }
+                note: { type: string }
+      responses:
+        '201':
+          description: Mouvement enregistré.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LedgerEntry' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/admin/payouts:
+    get:
+      tags: [Admin]
+      summary: Lister les paiements aux fournisseurs
+      operationId: adminListPayouts
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, paid, cancelled] } }
+      responses:
+        '200':
+          description: Paiements.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Payout' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Admin]
+      summary: Préparer un paiement pour un fournisseur
+      description: Réserve le montant sur le solde disponible du fournisseur.
+      operationId: adminCreatePayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider_id, amount]
+              properties:
+                provider_id: { type: string, format: uuid }
+                amount: { type: integer, minimum: 1 }
+                method: { type: string }
+      responses:
+        '201':
+          description: Paiement en attente.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payout' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Solde disponible insuffisant.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /api/admin/payouts/{id}/mark-paid:
+    post:
+      tags: [Admin]
+      summary: Marquer un paiement comme effectué
+      operationId: adminMarkPayoutPaid
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reference]
+              properties:
+                reference: { type: string, description: Référence de la transaction externe. }
+      responses:
+        '200':
+          description: Paiement marqué payé.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payout' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------------- Agent
+  /agent/enroll:
+    post:
+      tags: [Agent]
+      summary: Enregistrer un agent avec son jeton d'inscription
+      description: |
+        Échange le jeton d'inscription à usage unique contre un jeton d'agent
+        permanent, et transmet l'inventaire matériel mesuré.
+      operationId: enrollAgent
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enrollment_token, hardware, agent_version]
+              properties:
+                enrollment_token: { type: string }
+                agent_version: { type: string }
+                hardware: { $ref: '#/components/schemas/Hardware' }
+      responses:
+        '201':
+          description: Agent enregistré.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [machine_id, agent_token, websocket_url]
+                properties:
+                  machine_id: { type: string, format: uuid }
+                  agent_token: { type: string }
+                  websocket_url: { type: string, format: uri }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /agent/models/{slug}/download:
+    get:
+      tags: [Agent]
+      summary: Obtenir un lien de téléchargement signé pour un modèle
+      operationId: getModelDownload
+      security: [{ agentToken: [] }]
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Lien temporaire et empreinte à vérifier après téléchargement.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, sha256, size_bytes, expires_at]
+                properties:
+                  url: { type: string, format: uri }
+                  sha256: { type: string }
+                  size_bytes: { type: integer }
+                  expires_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+security:
+  - session: []
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: Clé API client, préfixe `mk_live_`.
+    session:
+      type: http
+      scheme: bearer
+      description: Jeton de session renvoyé par `/api/auth/login`.
+    agentToken:
+      type: http
+      scheme: bearer
+      description: Jeton d'agent renvoyé par `/agent/enroll`.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+
+  responses:
+    BadRequest:
+      description: Requête invalide.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Authentification absente, invalide ou révoquée.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Rôle insuffisant.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Ressource introuvable ou appartenant à un autre compte.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InsufficientCredits:
+      description: Solde de crédits insuffisant.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Limite de débit dépassée pour cette clé.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Secondes à attendre avant de réessayer.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoCapacity:
+      description: Aucune machine disponible pour ce modèle ; réessayer plus tard.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      description: Même forme que les erreurs OpenAI.
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type:
+              type: string
+              enum: [invalid_request_error, authentication_error, permission_error, not_found_error, insufficient_credits, rate_limit_error, no_capacity, server_error]
+            code: { type: [string, 'null'] }
+            param: { type: [string, 'null'] }
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [system, user, assistant] }
+        content: { type: string }
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model: { type: string, description: Identifiant renvoyé par `/v1/models`. }
+        messages:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/ChatMessage' }
+        stream: { type: boolean, default: false }
+        max_tokens: { type: integer, minimum: 1 }
+        temperature: { type: number, minimum: 0, maximum: 2, default: 1 }
+        top_p: { type: number, minimum: 0, maximum: 1, default: 1 }
+        stop:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+              maxItems: 4
+        seed: { type: integer }
+    Usage:
+      type: object
+      required: [prompt_tokens, completion_tokens, total_tokens]
+      properties:
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+    ChatCompletionResponse:
+      type: object
+      required: [id, object, created, model, choices, usage]
+      properties:
+        id: { type: string, description: 'Identifiant de la tâche, préfixe `chatcmpl-`.' }
+        object: { type: string, const: chat.completion }
+        created: { type: integer, description: Horodatage Unix. }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            required: [index, message, finish_reason]
+            properties:
+              index: { type: integer }
+              message: { $ref: '#/components/schemas/ChatMessage' }
+              finish_reason: { type: string, enum: [stop, length] }
+        usage: { $ref: '#/components/schemas/Usage' }
+    ChatCompletionChunk:
+      type: object
+      required: [id, object, created, model, choices]
+      properties:
+        id: { type: string }
+        object: { type: string, const: chat.completion.chunk }
+        created: { type: integer }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            required: [index, delta]
+            properties:
+              index: { type: integer }
+              delta:
+                type: object
+                properties:
+                  role: { type: string, enum: [assistant] }
+                  content: { type: string }
+              finish_reason: { type: [string, 'null'], enum: [stop, length, null] }
+        usage:
+          description: Présent uniquement dans le dernier fragment.
+          oneOf:
+            - $ref: '#/components/schemas/Usage'
+            - type: 'null'
+    Model:
+      type: object
+      required: [id, object, created, owned_by]
+      properties:
+        id: { type: string }
+        object: { type: string, const: model }
+        created: { type: integer }
+        owned_by: { type: string, const: maillon }
+        context_length: { type: integer }
+        pricing:
+          type: object
+          description: Micro-crédits par million de tokens.
+          properties:
+            input: { type: integer }
+            output: { type: integer }
+
+    User:
+      type: object
+      required: [id, email, name, role, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { type: string, enum: [client, provider, admin] }
+        status: { type: string, enum: [active, suspended] }
+        created_at: { type: string, format: date-time }
+    Session:
+      type: object
+      required: [token, expires_at, user]
+      properties:
+        token: { type: string }
+        expires_at: { type: string, format: date-time }
+        user: { $ref: '#/components/schemas/User' }
+    ApiKey:
+      type: object
+      required: [id, name, key_prefix, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        key_prefix: { type: string, examples: [mk_live_ab12] }
+        rate_limit_per_min: { type: integer }
+        last_used_at: { type: [string, 'null'], format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+    Balance:
+      type: object
+      required: [available, pending]
+      properties:
+        available: { type: integer, description: Micro-crédits utilisables ou retirables. }
+        pending: { type: integer, description: Gains fournisseur en attente de vérification. }
+    LedgerEntry:
+      type: object
+      required: [id, type, amount, balance_after, created_at]
+      properties:
+        id: { type: integer }
+        type: { type: string, enum: [topup, job_debit, provider_earning, commission, payout, adjustment] }
+        amount: { type: integer, description: 'Signé, en micro-crédits.' }
+        balance_after: { type: integer }
+        job_id: { type: [string, 'null'], format: uuid }
+        note: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    LedgerPage:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/LedgerEntry' }
+        next_cursor: { type: [string, 'null'] }
+    UsageRow:
+      type: object
+      required: [date, model, requests, prompt_tokens, completion_tokens, cost]
+      properties:
+        date: { type: string, format: date }
+        model: { type: string }
+        requests: { type: integer }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        cost: { type: integer }
+
+    EarningsRow:
+      type: object
+      required: [machine_id, machine_name, jobs, compute_ms, earned]
+      properties:
+        machine_id: { type: string, format: uuid }
+        machine_name: { type: string }
+        jobs: { type: integer, description: Tâches réussies et rémunérées. }
+        compute_ms: { type: integer }
+        earned: { type: integer, description: Micro-crédits gagnés. }
+
+    MachineStatus:
+      type: string
+      enum: [pending, online, offline, suspended]
+    MachineTier:
+      type: string
+      enum: [A, B, C]
+    JobStatus:
+      type: string
+      enum: [queued, assigned, running, succeeded, failed, expired]
+    Hardware:
+      type: object
+      required: [os, cpu_cores, ram_mb, disk_free_gb]
+      properties:
+        os: { type: string, examples: [Ubuntu 24.04] }
+        gpu_model: { type: [string, 'null'], examples: [NVIDIA GeForce RTX 3060] }
+        vram_mb: { type: integer, minimum: 0 }
+        cpu_cores: { type: integer, minimum: 1 }
+        ram_mb: { type: integer, minimum: 1 }
+        disk_free_gb: { type: integer, minimum: 0 }
+    Machine:
+      type: object
+      required: [id, name, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/MachineStatus' }
+        tier:
+          oneOf:
+            - $ref: '#/components/schemas/MachineTier'
+            - type: 'null'
+        hardware:
+          oneOf:
+            - $ref: '#/components/schemas/Hardware'
+            - type: 'null'
+        agent_version: { type: [string, 'null'] }
+        benchmark_tokens_per_sec: { type: [number, 'null'] }
+        reliability_score: { type: number, minimum: 0, maximum: 1 }
+        jobs_succeeded: { type: integer }
+        jobs_failed: { type: integer }
+        last_heartbeat_at: { type: [string, 'null'], format: date-time }
+        suspended_reason: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    Job:
+      type: object
+      required: [id, status, model, attempts, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/JobStatus' }
+        model: { type: string }
+        client_id: { type: [string, 'null'], format: uuid }
+        machine_id: { type: [string, 'null'], format: uuid }
+        is_control: { type: boolean }
+        control_passed: { type: [boolean, 'null'] }
+        attempts: { type: integer }
+        prompt_tokens: { type: [integer, 'null'] }
+        completion_tokens: { type: [integer, 'null'] }
+        compute_ms: { type: [integer, 'null'] }
+        cost: { type: [integer, 'null'] }
+        error_code: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+    Payout:
+      type: object
+      required: [id, provider_id, amount, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        provider_id: { type: string, format: uuid }
+        amount: { type: integer }
+        status: { type: string, enum: [pending, paid, cancelled] }
+        method: { type: [string, 'null'] }
+        reference: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        paid_at: { type: [string, 'null'], format: date-time }

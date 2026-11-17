@@ -1,0 +1,57 @@
+# Pile locale pour tester Maillon sur son poste. NE PAS utiliser sur le VPS :
+# les mots de passe ci-dessous sont publics et ne servent qu'en local.
+#
+#   docker compose -f infra/docker-compose.dev.yml up --build
+#
+# Le serveur répond ensuite sur http://localhost:8000
+# Tout effacer (base comprise) : docker compose -f infra/docker-compose.dev.yml down -v
+
+name: maillon-dev
+
+services:
+  server:
+    build:
+      context: ../server
+    # Applique les migrations, puis démarre le serveur.
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    environment:
+      APP_ENV: development
+      DB_HOST: postgres
+      DB_NAME: maillon
+      DB_USER: maillon
+      DB_PASSWORD: maillon-dev
+      REDIS_HOST: redis
+      REDIS_PASSWORD: maillon-dev
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: maillon
+      POSTGRES_USER: maillon
+      POSTGRES_PASSWORD: maillon-dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maillon -d maillon"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "maillon-dev"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a maillon-dev --no-auth-warning ping | grep -q PONG"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

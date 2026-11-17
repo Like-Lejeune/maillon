@@ -1,4 +1,5 @@
 -- Maillon — schéma de base de données (PostgreSQL 15+)
+-- État après la migration 0002. Les migrations (server/migrations) font foi.
 -- Indépendant du framework : sert de référence aux migrations Laravel ou FastAPI.
 --
 -- Conventions
@@ -105,10 +106,14 @@ CREATE TABLE machines (
     current_job_id     uuid,                              -- une tâche à la fois (MVP)
     last_heartbeat_at  timestamptz,
     suspended_reason   text,
+    enrollment_expires_at timestamptz,               -- jeton d'inscription valable 24 h
+    removed_at         timestamptz,                  -- machine retirée par le fournisseur
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX machines_provider_idx ON machines (provider_id);
+CREATE INDEX machines_provider_active_idx ON machines (provider_id, created_at DESC)
+    WHERE removed_at IS NULL;
 -- Recherche de l'ordonnanceur : machines en ligne et libres, par niveau.
 CREATE INDEX machines_available_idx ON machines (tier, reliability_score DESC)
     WHERE status = 'online' AND current_job_id IS NULL;

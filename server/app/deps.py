@@ -5,11 +5,17 @@ from collections.abc import AsyncIterator, Callable
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from redis.asyncio import Redis
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.errors import ApiError
-from app.models import User
-from app.security import SESSION_TOKEN_PREFIX
+from app.models import ApiKey, Machine, User
+from app.security import (
+    AGENT_TOKEN_PREFIX,
+    API_KEY_PREFIX,
+    SESSION_TOKEN_PREFIX,
+    token_digest,
+)
 from app.sessions import get_session_user_id
 
 _bearer = HTTPBearer(auto_error=False)
@@ -61,3 +67,53 @@ def require_role(*roles: str) -> Callable:
         return user
 
     return _check
+
+
+async def _bearer_with_prefix(
+    credentials: HTTPAuthorizationCredentials | None, prefix: str, message: str
+) -> str:
+    if credentials is None or not credentials.credentials.startswith(prefix):
+        raise _unauthorized(message)
+    return credentials.credentials
+
+
+async def get_api_key_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: AsyncSession = Depends(get_db),
+) -> tuple[User, ApiKey]:
+    """Client authentifié par clé API (routes /v1). Une clé révoquée est refusée
+    dès la requête suivante : elle est vérifiée en base à chaque appel."""
+    message = "Clé API absente, invalide ou révoquée."
+    key = await _bearer_with_prefix(credentials, API_KEY_PREFIX, message)
+    api_key = (
+        await db.execute(select(ApiKey).where(ApiKey.key_hash == token_digest(key)))
+    ).scalar_one_or_none()
+    if api_key is None or api_key.revoked_at is not None:
+        raise _unauthorized(message)
+    user = await db.get(User, api_key.user_id)
+    if user is None or user.status != "active":
+        raise ApiError(403, "permission_error", "Ce compte est suspendu.", code="account_suspended")
+    await db.execute(
+        update(ApiKey).where(ApiKey.id == api_key.id).values(last_used_at=func.now())
+    )
+    await db.commit()
+    return user, api_key
+
+
+async def get_agent_machine(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: AsyncSession = Depends(get_db),
+) -> Machine:
+    """Machine authentifiée par son jeton d'agent (routes /agent)."""
+    message = "Jeton d'agent absent, invalide ou révoqué."
+    token = await _bearer_with_prefix(credentials, AGENT_TOKEN_PREFIX, message)
+    machine = (
+        await db.execute(
+            select(Machine).where(
+                Machine.agent_token_hash == token_digest(token), Machine.removed_at.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if machine is None:
+        raise _unauthorized(message)
+    return machine

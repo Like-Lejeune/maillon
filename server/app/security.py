@@ -37,3 +37,23 @@ def new_session_token() -> str:
 def token_digest(token: str) -> str:
     """Empreinte d'un jeton. Seule cette empreinte est stockée côté serveur."""
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+API_KEY_PREFIX = "mk_live_"
+ENROLLMENT_TOKEN_PREFIX = "me_"
+AGENT_TOKEN_PREFIX = "ma_"
+
+
+def new_api_key() -> tuple[str, str]:
+    """Renvoie (clé complète, préfixe affichable). La clé n'est montrée qu'une fois."""
+    secret = secrets.token_urlsafe(32)
+    key = API_KEY_PREFIX + secret
+    return key, key[: len(API_KEY_PREFIX) + 8]
+
+
+def new_enrollment_token() -> str:
+    return ENROLLMENT_TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
+def new_agent_token() -> str:
+    return AGENT_TOKEN_PREFIX + secrets.token_urlsafe(32)

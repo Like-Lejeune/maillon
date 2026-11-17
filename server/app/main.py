@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from app.config import get_settings
 from app.errors import install_error_handlers
-from app.routers import auth
+from app.routers import agent, api_keys, auth, inference, machines
 
 
 @asynccontextmanager
@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="API Maillon",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -37,6 +37,10 @@ app = FastAPI(
 )
 install_error_handlers(app)
 app.include_router(auth.router)
+app.include_router(api_keys.router)
+app.include_router(machines.router)
+app.include_router(agent.router)
+app.include_router(inference.router)
 
 
 @app.get("/health/live", include_in_schema=False)

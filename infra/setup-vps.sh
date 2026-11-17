@@ -29,7 +29,7 @@ export DEBIAN_FRONTEND=noninteractive
 echo "== 1/5 Mise à jour du système"
 apt-get update -y
 apt-get upgrade -y
-apt-get install -y ca-certificates curl git ufw fail2ban unattended-upgrades
+apt-get install -y ca-certificates curl git rsync ufw fail2ban unattended-upgrades
 dpkg-reconfigure -f noninteractive unattended-upgrades
 
 echo "== 2/5 Installation de Docker"

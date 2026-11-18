@@ -3,6 +3,7 @@
     maillon-agent info                                  Matériel détecté
     maillon-agent enroll --server https://api.exemple   Inscrire la machine
     maillon-agent status                                État vu par le serveur
+    maillon-agent run                                   Rester connecté au réseau
     maillon-agent forget                                Effacer l'inscription locale
 
 Le jeton d'inscription est demandé au clavier (il n'apparaît ni à l'écran ni
@@ -12,11 +13,13 @@ dans l'historique), ou lu dans la variable MAILLON_ENROLLMENT_TOKEN.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import getpass
+import logging
 import os
 import sys
 
-from maillon_agent import __version__, client, config, hardware
+from maillon_agent import __version__, client, config, connection, hardware
 
 # Mêmes seuils que le serveur (server/app/tiers.py). Le serveur fait foi :
 # l'affichage local n'est qu'une estimation.
@@ -105,6 +108,33 @@ def cmd_status(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    cfg = config.load()
+    if cfg is None:
+        print("Cette machine n'est pas inscrite. Lancez d'abord : maillon-agent enroll", file=sys.stderr)
+        return 1
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    runner = connection.AgentRunner(
+        websocket_url=cfg.websocket_url,
+        agent_token=cfg.agent_token,
+        models_dir=config.models_dir(),
+        detect_hardware=lambda: hardware.detect(config.models_dir()),
+    )
+    logging.getLogger("maillon_agent").info(
+        "maillon-agent %s démarre, serveur %s", __version__, cfg.server_url
+    )
+    try:
+        asyncio.run(runner.run_forever())
+    except connection.StopAgent as stop:
+        logging.getLogger("maillon_agent").error("%s", stop)
+        return stop.exit_code
+    return 0
+
+
 def cmd_forget(_args: argparse.Namespace) -> int:
     if config.forget():
         print("Inscription locale effacée. Pensez à retirer aussi la machine de l'espace fournisseur.")
@@ -126,6 +156,10 @@ def build_parser() -> argparse.ArgumentParser:
     enroll.set_defaults(func=cmd_enroll)
 
     commands.add_parser("status", help="Afficher l'état de la machine").set_defaults(func=cmd_status)
+
+    run = commands.add_parser("run", help="Rester connecté au réseau (à lancer comme service)")
+    run.add_argument("-v", "--verbose", action="store_true", help="Journal détaillé")
+    run.set_defaults(func=cmd_run)
     commands.add_parser("forget", help="Effacer l'inscription locale").set_defaults(func=cmd_forget)
     return parser
 
@@ -138,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        return 130
+        print("Arrêt demandé.", file=sys.stderr)
+        return 0
 
 
 if __name__ == "__main__":

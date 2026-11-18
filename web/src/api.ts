@@ -86,6 +86,46 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export interface Balance {
+  available: number;
+  pending: number;
+}
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  key_prefix: string;
+  rate_limit_per_min: number;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface CreatedApiKey extends ApiKey {
+  key: string;
+}
+
+export type LedgerType = "topup" | "job_debit" | "provider_earning" | "commission" | "payout" | "adjustment";
+
+export interface LedgerEntry {
+  id: number;
+  type: LedgerType;
+  amount: number;
+  balance_after: number;
+  job_id: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface UsageRow {
+  date: string;
+  model: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost: number;
+}
+
 export const api = {
   register: (input: { email: string; password: string; name: string; role: "client" | "provider" }) =>
     request<Session>("POST", "/api/auth/register", input),
@@ -93,4 +133,13 @@ export const api = {
     request<Session>("POST", "/api/auth/login", input),
   logout: () => request<void>("POST", "/api/auth/logout"),
   me: () => request<User>("GET", "/api/me"),
+  balance: () => request<Balance>("GET", "/api/balance"),
+  ledger: (limit = 10) => request<{ data: LedgerEntry[]; next_cursor: string | null }>("GET", `/api/ledger?limit=${limit}`),
+  usage: (from: string, to: string) =>
+    request<UsageRow[]>("GET", `/api/usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  apiKeys: {
+    list: () => request<ApiKey[]>("GET", "/api/api-keys"),
+    create: (name: string) => request<CreatedApiKey>("POST", "/api/api-keys", { name }),
+    revoke: (id: string) => request<void>("DELETE", `/api/api-keys/${encodeURIComponent(id)}`),
+  },
 };

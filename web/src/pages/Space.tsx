@@ -3,12 +3,12 @@ import { useState } from "react";
 import type { Role } from "../api";
 import { useAuth } from "../auth";
 import { useRouter } from "../router";
+import { ClientDashboard } from "./ClientDashboard";
 
-// Espace provisoire : les tableaux de bord des maquettes arrivent à partir du 18 novembre.
-const SPACES: Record<Role, { label: string; next: string }> = {
-  client: { label: "Espace client", next: "Tableau de bord, clés API et consommation." },
-  provider: { label: "Espace fournisseur", next: "Vos machines, leurs gains et l'installation de l'agent." },
-  admin: { label: "Administration", next: "État du réseau, machines, tâches, recharges et paiements." },
+const SPACES: Record<Role, { label: string; lead: string }> = {
+  client: { label: "Espace client", lead: "Solde, clés et consommation de votre compte." },
+  provider: { label: "Espace fournisseur", lead: "Vos machines, leurs gains et l'installation de l'agent." },
+  admin: { label: "Administration", lead: "État du réseau, machines, tâches, recharges et paiements." },
 };
 
 export function Space() {
@@ -36,12 +36,19 @@ export function Space() {
         </button>
       </header>
       <main className="content">
-        <h1>Bonjour {user.name}</h1>
-        <p className="muted">Votre compte est actif.</p>
-        <section className="panel">
-          <h2>Bientôt ici</h2>
-          <p>{space.next}</p>
-        </section>
+        <div className="page-head">
+          <h1>{user.role === "client" ? "Tableau de bord" : `Bonjour ${user.name}`}</h1>
+          <p className="muted">{space.lead}</p>
+        </div>
+        {user.role === "client" ? (
+          <ClientDashboard />
+        ) : (
+          // Espaces fournisseur et admin : planning des 23 et 25 novembre.
+          <section className="panel">
+            <h2>Bientôt ici</h2>
+            <p>Cet espace ouvre avant le lancement du 1er décembre.</p>
+          </section>
+        )}
       </main>
     </div>
   );

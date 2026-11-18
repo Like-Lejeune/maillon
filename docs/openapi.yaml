@@ -195,6 +195,11 @@ paths:
                     required: [key]
                     properties:
                       key: { type: string, examples: [mk_live_ab12cd34ef56] }
+        '409':
+          description: Limite de 20 clés actives atteinte.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
   /api/api-keys/{id}:
     delete:
       tags: [Client]
@@ -284,10 +289,16 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [machine, enrollment_token]
+                required: [machine, enrollment_token, enrollment_expires_at]
                 properties:
                   machine: { $ref: '#/components/schemas/Machine' }
-                  enrollment_token: { type: string }
+                  enrollment_token: { type: string, description: 'Usage unique, valable 24 heures.' }
+                  enrollment_expires_at: { type: string, format: date-time }
+        '409':
+          description: Limite de 50 machines atteinte.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
   /api/machines/{id}:
     get:
       tags: [Fournisseur]
@@ -581,11 +592,30 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [machine_id, agent_token, websocket_url]
+                required: [machine_id, agent_token, websocket_url, tier, eligible, ineligibility_reason]
                 properties:
                   machine_id: { type: string, format: uuid }
                   agent_token: { type: string }
                   websocket_url: { type: string, format: uri }
+                  tier:
+                    oneOf:
+                      - $ref: '#/components/schemas/MachineTier'
+                      - type: 'null'
+                  eligible: { type: boolean, description: 'Faux si la machine ne remplit pas les conditions minimales.' }
+                  ineligibility_reason: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /agent/me:
+    get:
+      tags: [Agent]
+      summary: Vérifier le jeton d'agent et lire la fiche de la machine
+      operationId: getAgentMe
+      security: [{ agentToken: [] }]
+      responses:
+        '200':
+          description: Machine liée au jeton.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Machine' }
         '401': { $ref: '#/components/responses/Unauthorized' }
   /agent/models/{slug}/download:
     get:
@@ -818,7 +848,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        key_prefix: { type: string, examples: [mk_live_ab12] }
+        key_prefix: { type: string, examples: [mk_live_ab12cd34] }
         rate_limit_per_min: { type: integer }
         last_used_at: { type: [string, 'null'], format: date-time }
         revoked_at: { type: [string, 'null'], format: date-time }

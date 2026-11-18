@@ -30,6 +30,9 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       APP_ENV: test
+      HEARTBEAT_INTERVAL_SECONDS: "1"
+      HEARTBEAT_TIMEOUT_SECONDS: "3"
+      PRESENCE_SWEEP_SECONDS: "1"
       DB_HOST: 127.0.0.1
       DB_PORT: "5432"
       DB_NAME: maillon_test

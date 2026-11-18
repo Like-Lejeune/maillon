@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     login_max_failures: int = 5
     login_lockout_minutes: int = 15
 
+    # Canal temps réel avec les agents (voir docs/agent-protocol.md)
+    heartbeat_interval_seconds: int = 10
+    heartbeat_timeout_seconds: int = 30
+    presence_sweep_seconds: int = 5
+
     def _database_url(self, driver: str) -> str:
         password = quote(self.db_password, safe="")
         return (

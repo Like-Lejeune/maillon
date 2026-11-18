@@ -3,7 +3,8 @@
 Les routes du contrat (docs/openapi.yaml) s'ajoutent tâche par tâche.
 """
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -11,9 +12,10 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+from app.agent_hub import AgentHub
 from app.config import get_settings
 from app.errors import install_error_handlers
-from app.routers import account, agent, api_keys, auth, inference, machines
+from app.routers import account, agent, agent_ws, api_keys, auth, inference, machines
 
 
 @asynccontextmanager
@@ -22,14 +24,24 @@ async def lifespan(app: FastAPI):
     app.state.engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     app.state.session_factory = async_sessionmaker(app.state.engine, expire_on_commit=False)
     app.state.redis = Redis.from_url(settings.redis_url, socket_connect_timeout=2)
+    app.state.agent_hub = AgentHub(app.state.session_factory)
+    sweeper = asyncio.create_task(
+        app.state.agent_hub.run_sweeper(
+            settings.presence_sweep_seconds, settings.heartbeat_timeout_seconds
+        )
+    )
     yield
+    sweeper.cancel()
+    with suppress(asyncio.CancelledError):
+        await sweeper
+    await app.state.agent_hub.close_all()
     await app.state.redis.aclose()
     await app.state.engine.dispose()
 
 
 app = FastAPI(
     title="API Maillon",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -41,6 +53,7 @@ app.include_router(api_keys.router)
 app.include_router(account.router)
 app.include_router(machines.router)
 app.include_router(agent.router)
+app.include_router(agent_ws.router)
 app.include_router(inference.router)
 
 

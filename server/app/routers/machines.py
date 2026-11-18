@@ -3,10 +3,11 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent_hub import CLOSE_UNAUTHORIZED
 from app.deps import get_db, require_role
 from app.errors import ApiError
 from app.models import Machine, User
@@ -88,6 +89,7 @@ async def get_machine(
 @router.delete("/{machine_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_machine(
     machine_id: uuid.UUID,
+    request: Request,
     provider: User = Depends(require_role("provider")),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
@@ -99,4 +101,5 @@ async def remove_machine(
     machine.enrollment_token_hash = None
     machine.status = "offline"
     await db.commit()
+    await request.app.state.agent_hub.kick(machine.id, CLOSE_UNAUTHORIZED, "Machine retirée par le fournisseur.")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

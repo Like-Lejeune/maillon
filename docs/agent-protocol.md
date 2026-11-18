@@ -65,6 +65,21 @@ Chaque message est un objet JSON sur une trame texte :
 - **Trois essais au plus** par tâche. Au-delà, le client reçoit une erreur
   503 et n'est pas débité.
 
+## Codes de fermeture du canal
+
+| Code | Signification | L'agent doit |
+|---|---|---|
+| 4001 | Jeton absent, invalide ou révoqué (machine retirée) | S'arrêter et demander une réinscription |
+| 4003 | Machine suspendue (message `suspended` envoyé avant) | S'arrêter |
+| 4000 | Une autre connexion de la même machine a pris la place | S'arrêter, pour ne pas se disputer la place |
+| 4008 | Aucun message reçu dans le délai (30 s) | Se reconnecter |
+| 4002 | Trop de messages invalides | Se reconnecter |
+| 1012 | Redémarrage du serveur | Se reconnecter |
+| autre, ou coupure réseau | | Se reconnecter avec attente croissante |
+
+Le serveur répond `error` à un message invalide (type inconnu, `heartbeat`
+avant `hello`, données incorrectes) et ferme le canal au cinquième.
+
 ## Codes d'erreur de `job.error`
 
 | Code | Signification | `retryable` |

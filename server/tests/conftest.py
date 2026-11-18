@@ -55,3 +55,25 @@ def account() -> dict:
         "name": "Awa",
         "role": "client",
     }
+
+
+@pytest_asyncio.fixture(scope="session")
+async def live_server(running_app):
+    """Vrai serveur HTTP/WebSocket sur un port libre, qui partage l'état de running_app."""
+    import asyncio
+    import socket
+
+    import uvicorn
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(running_app, host="127.0.0.1", port=port, lifespan="off", log_level="warning")
+    )
+    task = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.05)
+    yield f"127.0.0.1:{port}"
+    server.should_exit = True
+    await task

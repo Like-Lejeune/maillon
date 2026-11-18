@@ -55,6 +55,17 @@ compose() { docker compose -p "$PROJECT" --env-file "$ENV_FILE" -f "$REPO/infra/
 
 compose up -d --build --remove-orphans
 
+# Interface web : construite dans un conteneur Node (pas de Node sur le VPS),
+# puis copiée dans le dossier servi par Caddy.
+if [[ -f "$REPO/web/package.json" ]]; then
+  echo "== Construction de l'interface web"
+  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    -v "$REPO/web:/app" -w /app node:22-alpine \
+    sh -c "npm ci --no-audit --no-fund && npm run build"
+  mkdir -p "$BASE/web"
+  rsync -a --delete "$REPO/web/dist/" "$BASE/web/"
+fi
+
 # Migrations de base, dès que le serveur en contient.
 if [[ -f "$REPO/server/alembic.ini" ]]; then
   compose exec -T server alembic upgrade head

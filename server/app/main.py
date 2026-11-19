@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from app.agent_hub import AgentHub
 from app.config import get_settings
 from app.errors import install_error_handlers
-from app.routers import agent, agent_ws, api_keys, auth, inference, machines
+from app.routers import account, agent, agent_ws, api_keys, auth, inference, machines
 
 
 @asynccontextmanager
@@ -50,6 +50,7 @@ app = FastAPI(
 install_error_handlers(app)
 app.include_router(auth.router)
 app.include_router(api_keys.router)
+app.include_router(account.router)
 app.include_router(machines.router)
 app.include_router(agent.router)
 app.include_router(agent_ws.router)

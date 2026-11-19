@@ -45,6 +45,9 @@ class AgentHub:
     def is_connected(self, machine_id: uuid.UUID) -> bool:
         return machine_id in self._connections
 
+    def connected_ids(self) -> list[uuid.UUID]:
+        return list(self._connections)
+
     @property
     def connected_count(self) -> int:
         return len(self._connections)

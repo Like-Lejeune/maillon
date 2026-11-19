@@ -30,6 +30,9 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       APP_ENV: test
+      QUEUE_WAIT_SECONDS: "1"
+      JOB_ACK_SECONDS: "1"
+      JOB_TIMEOUT_SECONDS: "3"
       HEARTBEAT_INTERVAL_SECONDS: "1"
       HEARTBEAT_TIMEOUT_SECONDS: "3"
       PRESENCE_SWEEP_SECONDS: "1"

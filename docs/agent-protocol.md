@@ -47,13 +47,23 @@ Chaque message est un objet JSON sur une trame texte :
 | `model.prepare` | Demande de mise en cache d'un modèle | `model` |
 | `suspended` | Machine suspendue | `reason` |
 
+## Modèles
+
+- Après `welcome`, le serveur envoie un `model.prepare` pour chaque modèle du
+  catalogue que la machine peut servir (mémoire GPU suffisante) et n'a pas en cache.
+- L'agent demande alors `GET /agent/models/{slug}/download`, télécharge le
+  fichier, vérifie son empreinte SHA-256, puis envoie `model.cached`.
+- Le serveur n'enregistre le modèle que si l'empreinte est celle du catalogue ;
+  sinon il répond `error`.
+- Une tâche n'est confiée qu'à une machine qui a le modèle en cache.
+
 ## Règles
 
 - **Une tâche à la fois** par machine dans la version 1.0. Un `job.assign`
   reçu alors que l'agent est occupé est refusé par `job.error` avec le code
   `busy` et `retryable: true`.
-- **Accusé de réception** : sans `job.accepted` dans les 5 s, le serveur
-  réattribue la tâche à une autre machine.
+- **Accusé de réception** : sans `job.accepted` dans les 5 s, la tâche échoue
+  (réattribution à une autre machine : planning du 20 novembre).
 - **Machine perdue** : sans `heartbeat` pendant 30 s, le serveur passe la
   machine hors ligne et réattribue sa tâche en cours.
 - **La durée facturée est mesurée par le serveur**, entre `job.accepted` et
@@ -62,8 +72,10 @@ Chaque message est un objet JSON sur une trame texte :
   Les valeurs envoyées par l'agent servent seulement de contrôle.
 - **Résultat en double** : un `job.result` pour une tâche déjà terminée ou
   réattribuée est ignoré et n'est pas rémunéré.
-- **Trois essais au plus** par tâche. Au-delà, le client reçoit une erreur
-  503 et n'est pas débité.
+- **Délai d'exécution** : 120 s après l'attribution ; au-delà, la tâche expire,
+  le serveur envoie `job.cancel` et le client reçoit une erreur 504.
+- **Trois essais au plus** par tâche (à partir du 20 novembre). Au-delà, le
+  client reçoit une erreur 503 et n'est pas débité.
 
 ## Codes de fermeture du canal
 

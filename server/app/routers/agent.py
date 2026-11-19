@@ -1,6 +1,6 @@
 """Routes utilisées par l'agent installé sur les machines."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import select
@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps import get_agent_machine, get_db
 from app.errors import ApiError
-from app.models import Machine
+from app.models import Machine, Model
 from app.schemas import EnrollRequest, EnrollResponse, MachineOut
 from app.security import ENROLLMENT_TOKEN_PREFIX, new_agent_token, token_digest
 from app.tiers import compute_tier, ineligibility_reason
@@ -92,3 +92,29 @@ async def enroll(
 async def agent_me(machine: Machine = Depends(get_agent_machine)) -> MachineOut:
     """Permet à l'agent de vérifier que son jeton est toujours valide."""
     return MachineOut.from_machine(machine)
+
+
+@router.get("/models/{slug}/download")
+async def model_download(
+    slug: str,
+    machine: Machine = Depends(get_agent_machine),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Où télécharger un modèle, et l'empreinte à vérifier après téléchargement.
+
+    Les fichiers des modèles ouverts sont publics (par exemple sur Hugging Face) :
+    l'agent les télécharge directement, sans passer par le VPS.
+    """
+    model = (
+        await db.execute(select(Model).where(Model.slug == slug, Model.is_active.is_(True)))
+    ).scalar_one_or_none()
+    if model is None:
+        raise ApiError(404, "not_found_error", f"Modèle inconnu : {slug}.")
+    if machine.tier is None or (machine.vram_mb or 0) < model.min_vram_mb:
+        raise ApiError(403, "permission_error", "Cette machine ne peut pas servir ce modèle.")
+    return {
+        "url": model.file_url,
+        "sha256": model.file_sha256,
+        "size_bytes": model.file_size_bytes,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+    }

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from app.agent_hub import AgentHub
 from app.config import get_settings
+from app.dispatch import Dispatcher
 from app.errors import install_error_handlers
 from app.routers import account, agent, agent_ws, api_keys, auth, inference, machines
 
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
     app.state.session_factory = async_sessionmaker(app.state.engine, expire_on_commit=False)
     app.state.redis = Redis.from_url(settings.redis_url, socket_connect_timeout=2)
     app.state.agent_hub = AgentHub(app.state.session_factory)
+    app.state.dispatcher = Dispatcher(app.state.session_factory, app.state.agent_hub, settings)
     sweeper = asyncio.create_task(
         app.state.agent_hub.run_sweeper(
             settings.presence_sweep_seconds, settings.heartbeat_timeout_seconds

@@ -70,6 +70,8 @@ def test_backoff_doubles_and_caps_at_60():
 
 async def test_hello_carries_token_hardware_and_heartbeats_follow(tmp_path):
     (tmp_path / "llama-3-8b.gguf").write_bytes(b"x")
+    (tmp_path / "llama-3-8b.sha256").write_text("0" * 64)
+    (tmp_path / "non-verifie.gguf").write_bytes(b"x")  # sans empreinte : pas annoncé
     received, headers = [], []
 
     async def handler(ws):
@@ -182,20 +184,3 @@ async def test_suspended_message_stops_with_the_reason(tmp_path):
                 await runner(port, tmp_path).run_forever()
     assert stopped.value.exit_code == connection.EXIT_SUSPENDED
     assert "résultats faux" in str(stopped.value)
-
-
-async def test_job_assign_is_declined_for_now(tmp_path):
-    replies = []
-
-    async def handler(ws):
-        await ws.recv()
-        await ws.send(welcome(10))
-        await ws.send(json.dumps({"type": "job.assign", "data": {"job_id": "j-1"}}))
-        async for raw in ws:
-            replies.append(json.loads(raw))
-
-    port = free_port()
-    async with await start(port, handler):
-        await run_until(runner(port, tmp_path), lambda: replies)
-    assert replies[0]["type"] == "job.error"
-    assert replies[0]["data"]["job_id"] == "j-1" and replies[0]["data"]["retryable"] is True

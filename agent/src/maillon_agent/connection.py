@@ -16,6 +16,7 @@ import json
 import logging
 import random
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,7 +26,11 @@ from typing import Callable
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI
 
+import httpx
+
 from maillon_agent import __version__, hardware
+from maillon_agent.engine import EngineError, LlamaEngine
+from maillon_agent.store import ModelStore, StoreError
 
 logger = logging.getLogger("maillon_agent")
 
@@ -71,12 +76,6 @@ def message(kind: str, data: dict) -> str:
     )
 
 
-def cached_models(models_dir: Path) -> list[str]:
-    if not models_dir.is_dir():
-        return []
-    return sorted(path.stem for path in models_dir.glob("*.gguf"))[:100]
-
-
 def gpu_usage() -> tuple[float | None, int | None]:
     """Charge du GPU (%) et mémoire libre (Mio), ou (None, None) sans GPU."""
     executable = hardware.find_nvidia_smi()
@@ -104,8 +103,20 @@ class AgentRunner:
     models_dir: Path
     detect_hardware: Callable[[], hardware.Hardware]
     gpu_usage: Callable[[], tuple[float | None, int | None]] = gpu_usage
+    server_url: str = ""
+    engine: LlamaEngine | None = None
     # Rempli à chaque connexion réussie ; sert aux tests et aux journaux.
     connections: int = field(default=0, init=False)
+
+    def __post_init__(self) -> None:
+        self.store = ModelStore(self.models_dir)
+        if self.engine is None:
+            self.engine = LlamaEngine(self.models_dir)
+        self._ws: ClientConnection | None = None
+        self._job_id: str | None = None
+        self._job_task: asyncio.Task | None = None
+        self._downloads: dict[str, asyncio.Task] = {}
+        self._warmup: asyncio.Task | None = None
 
     async def run_forever(self) -> None:
         """Se connecte et se reconnecte jusqu'à un arrêt définitif (StopAgent)."""
@@ -157,7 +168,7 @@ class AgentRunner:
                 {
                     "agent_version": __version__,
                     "hardware": hw.as_payload(),
-                    "cached_models": cached_models(self.models_dir),
+                    "cached_models": self.store.cached(),
                 },
             )
         )
@@ -170,7 +181,9 @@ class AgentRunner:
             welcome.get("tier") or "aucun",
             interval,
         )
+        self._ws = ws
         heartbeat = asyncio.create_task(self._heartbeats(ws, interval))
+        self._start_warmup()
         try:
             await self._listen(ws)
         except ConnectionClosed as exc:
@@ -178,6 +191,10 @@ class AgentRunner:
             raise _Welcomed(_describe(exc)) from exc
         finally:
             heartbeat.cancel()
+            self._ws = None
+            # Le serveur a déjà considéré la tâche comme perdue : on l'abandonne.
+            if self._job_task is not None:
+                self._job_task.cancel()
 
     async def _wait_welcome(self, ws: ClientConnection) -> dict:
         try:
@@ -199,7 +216,7 @@ class AgentRunner:
         while True:
             await asyncio.sleep(interval)
             util, free = await asyncio.to_thread(self.gpu_usage)
-            data = {"busy": False, "job_id": None, "gpu_util": util, "vram_free_mb": free}
+            data = {"busy": self._job_id is not None, "job_id": self._job_id, "gpu_util": util, "vram_free_mb": free}
             try:
                 await ws.send(message("heartbeat", data))
             except ConnectionClosed:
@@ -215,20 +232,107 @@ class AgentRunner:
             if kind == "error":
                 logger.error("Message refusé par le serveur : %s", data.get("message"))
             elif kind == "job.assign":
-                # L'exécution des tâches arrive avec le conteneur d'inférence.
-                await ws.send(
-                    message(
-                        "job.error",
-                        {
-                            "job_id": data.get("job_id"),
-                            "code": "runtime_error",
-                            "message": "Exécution des tâches pas encore disponible dans cette version.",
-                            "retryable": True,
-                        },
-                    )
-                )
+                await self._on_assign(ws, data)
+            elif kind == "job.cancel":
+                if self._job_task is not None and data.get("job_id") == self._job_id:
+                    logger.info("Tâche %s annulée par le serveur (%s).", self._job_id, data.get("reason"))
+                    self._job_task.cancel()
+            elif kind == "model.prepare":
+                self._prepare(str(data.get("model") or ""))
             else:
                 logger.debug("Message ignoré : %s", kind)
+
+    # ------------------------------------------------------------------ tâches
+    async def _on_assign(self, ws: ClientConnection, data: dict) -> None:
+        job_id = str(data.get("job_id") or "")
+        if self._job_id is not None:
+            await ws.send(message("job.error", {"job_id": job_id, "code": "busy", "message": "Machine occupée.", "retryable": True}))
+            return
+        await ws.send(message("job.accepted", {"job_id": job_id}))
+        self._job_id = job_id
+        self._job_task = asyncio.create_task(self._run_job(ws, job_id, data))
+
+    async def _run_job(self, ws: ClientConnection, job_id: str, data: dict) -> None:
+        model = str(data.get("model") or "")
+        timeout = float(data.get("timeout_seconds") or 120)
+        started = time.monotonic()
+        try:
+            if not self.store.has(model):
+                raise EngineError("model_missing", f"Modèle {model} absent du cache.")
+            await self.engine.ensure(model)
+            remaining = max(timeout - (time.monotonic() - started), 1.0)
+            result = await self.engine.complete(data.get("request") or {}, timeout=remaining)
+            reply = message(
+                "job.result",
+                {
+                    "job_id": job_id,
+                    "content": result.content,
+                    "finish_reason": result.finish_reason,
+                    "prompt_tokens": result.prompt_tokens,
+                    "completion_tokens": result.completion_tokens,
+                },
+            )
+            logger.info("Tâche %s terminée en %.1f s.", job_id, time.monotonic() - started)
+        except asyncio.CancelledError:
+            return
+        except EngineError as exc:
+            logger.warning("Tâche %s en échec : %s", job_id, exc)
+            reply = message("job.error", {"job_id": job_id, "code": exc.code, "message": str(exc)[:300], "retryable": exc.retryable})
+        except Exception as exc:  # une tâche ne doit jamais faire tomber l'agent
+            logger.exception("Erreur inattendue sur la tâche %s", job_id)
+            reply = message("job.error", {"job_id": job_id, "code": "runtime_error", "message": exc.__class__.__name__, "retryable": True})
+        finally:
+            if self._job_id == job_id:
+                self._job_id = None
+                self._job_task = None
+        try:
+            await ws.send(reply)
+        except ConnectionClosed:
+            pass
+
+    # ------------------------------------------------------------------ modèles
+    def _prepare(self, slug: str) -> None:
+        if not slug or slug in self._downloads or self.store.has(slug):
+            return
+        self._downloads[slug] = asyncio.create_task(self._download(slug))
+
+    async def _download(self, slug: str) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=20) as http:
+                response = await http.get(
+                    f"{self.server_url}/agent/models/{slug}/download",
+                    headers={"Authorization": f"Bearer {self.agent_token}"},
+                )
+            if response.status_code != 200:
+                logger.warning("Modèle %s : téléchargement refusé (HTTP %s).", slug, response.status_code)
+                return
+            info = response.json()
+            logger.info("Téléchargement du modèle %s (%.1f Go)…", slug, info["size_bytes"] / 1024**3)
+            await asyncio.to_thread(self.store.download, slug, info["url"], info["sha256"], int(info["size_bytes"]))
+            if self._ws is not None:
+                await self._ws.send(message("model.cached", {"model": slug, "sha256": self.store.digest(slug)}))
+            self._start_warmup()
+        except (StoreError, httpx.HTTPError, KeyError, ValueError) as exc:
+            logger.warning("Modèle %s non téléchargé : %s", slug, exc)
+        except ConnectionClosed:
+            pass  # annoncé au prochain hello
+        finally:
+            self._downloads.pop(slug, None)
+
+    def _start_warmup(self) -> None:
+        """Charge à l'avance le premier modèle en cache, pour que la première tâche
+        n'attende pas le chargement en mémoire."""
+        cached = self.store.cached()
+        if not cached or self.engine.model is not None or (self._warmup and not self._warmup.done()):
+            return
+
+        async def warm() -> None:
+            try:
+                await self.engine.ensure(cached[0])
+            except EngineError as exc:
+                logger.warning("Préchargement du modèle %s impossible : %s", cached[0], exc)
+
+        self._warmup = asyncio.create_task(warm())
 
     @staticmethod
     def _raise_if_final(exc: ConnectionClosed) -> None:

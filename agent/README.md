@@ -1,8 +1,8 @@
 # Agent Maillon
 
-Programme installé sur chaque machine de calcul. Version 0.2 : il mesure le
-matériel, inscrit la machine et la garde connectée au réseau. L'exécution des
-tâches arrive dans la version suivante.
+Programme installé sur chaque machine de calcul. Version 0.3 : il mesure le
+matériel, inscrit la machine, la garde connectée au réseau, télécharge les
+modèles demandés et exécute les tâches avec llama.cpp.
 
 ## Prérequis
 
@@ -10,6 +10,21 @@ tâches arrive dans la version suivante.
 - Python 3.10 ou plus récent.
 - Pilote NVIDIA installé (il fournit `nvidia-smi`). Sans lui, la machine est
   inscrite sans GPU et ne reçoit aucune tâche.
+
+## Moteur d'inférence (llama.cpp)
+
+L'agent fait tourner les modèles avec `llama-server`, de l'une de ces deux façons :
+
+| Méthode | Installation | Réglage |
+|---|---|---|
+| Exécutable | Télécharger une version **CUDA** de llama.cpp depuis ses publications GitHub et rendre `llama-server` accessible dans le PATH | `MAILLON_LLAMA_SERVER` pour indiquer un autre chemin |
+| Docker | Docker et le NVIDIA Container Toolkit (Linux) ou Docker Desktop avec WSL2 (Windows) | `MAILLON_LLAMA_IMAGE` pour changer d'image (par défaut `ghcr.io/ggml-org/llama.cpp:server-cuda`) |
+
+Par défaut (`MAILLON_ENGINE=auto`), l'exécutable est préféré s'il est trouvé,
+sinon Docker. `MAILLON_ENGINE=binary` ou `docker` force un choix.
+
+`llama-server` n'écoute que sur la machine elle-même (127.0.0.1) : rien n'est
+ouvert sur le réseau. Ses journaux vont dans `engine.log`, à côté de la configuration.
 
 ## Installation
 
@@ -96,6 +111,14 @@ $Trigger = New-ScheduledTaskTrigger -AtLogOn
 $Settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit 0
 Register-ScheduledTask -TaskName "Maillon agent" -Action $Action -Trigger $Trigger -Settings $Settings
 ```
+
+## Modèles
+
+Le serveur indique les modèles que la machine peut servir. L'agent les
+télécharge seul (un modèle de 7 milliards de paramètres pèse environ 4,5 Go),
+vérifie leur empreinte SHA-256, puis les annonce. Un téléchargement interrompu
+reprend là où il s'était arrêté. Les modèles sont rangés dans le dossier
+`models` de la configuration.
 
 ## Autres commandes
 

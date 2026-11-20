@@ -118,11 +118,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    # Une ligne par requête HTTP noierait le journal : seulement les problèmes.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     runner = connection.AgentRunner(
         websocket_url=cfg.websocket_url,
         agent_token=cfg.agent_token,
         models_dir=config.models_dir(),
         detect_hardware=lambda: hardware.detect(config.models_dir()),
+        server_url=cfg.server_url,
     )
     logging.getLogger("maillon_agent").info(
         "maillon-agent %s démarre, serveur %s", __version__, cfg.server_url

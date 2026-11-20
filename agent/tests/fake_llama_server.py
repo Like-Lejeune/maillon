@@ -21,14 +21,14 @@ parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--port", type=int, required=True)
 parser.add_argument("-c", type=int, default=4096)
 parser.add_argument("-ngl", type=int, default=0)
-args = parser.parse_args()
+args, extra = parser.parse_known_args()
 
 model = Path(args.m)
 if b"oom" in model.read_bytes()[:100]:
     print("ggml_cuda: out of memory", file=sys.stderr, flush=True)
     sys.exit(1)
 ready_at = time.monotonic() + float(os.environ.get("FAKE_LOAD_SECONDS", "0.3"))
-print(f"faux llama-server : {model.name} sur le port {args.port}", flush=True)
+print(f"faux llama-server : {model.name} sur le port {args.port}, options {extra}", flush=True)
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -338,3 +338,19 @@ async def test_job_for_a_missing_model_fails_cleanly(tmp_path):
             task.cancel()
     error = next(m["data"] for m in received if m["type"] == "job.error")
     assert error["code"] == "model_missing" and error["retryable"] is True
+
+
+async def test_extra_llama_args_are_passed_and_reserved_ones_refused(fake_engine, tmp_path, monkeypatch):
+    store = ModelStore(tmp_path / "models")
+    put_model(store, "alpha")
+    monkeypatch.setenv("MAILLON_LLAMA_ARGS", "--reasoning-budget 0 --flash-attn on")
+    engine = LlamaEngine(store.directory)
+    try:
+        await engine.ensure("alpha")
+    finally:
+        await engine.stop()
+    assert "'--reasoning-budget', '0', '--flash-attn', 'on'" in engine.log_path.read_text()
+
+    monkeypatch.setenv("MAILLON_LLAMA_ARGS", "--host 0.0.0.0")
+    with pytest.raises(EngineError, match="interdite"):
+        await LlamaEngine(store.directory).ensure("alpha")

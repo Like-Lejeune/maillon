@@ -59,7 +59,17 @@ paths:
         '402': { $ref: '#/components/responses/InsufficientCredits' }
         '404': { $ref: '#/components/responses/NotFound' }
         '429': { $ref: '#/components/responses/RateLimited' }
+        '502':
+          description: La machine n'a pas pu traiter la requête ; réessayer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '503': { $ref: '#/components/responses/NoCapacity' }
+        '504':
+          description: Délai d'exécution dépassé.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
   /v1/models:
     get:
       tags: [Inférence]
@@ -620,7 +630,8 @@ paths:
   /agent/models/{slug}/download:
     get:
       tags: [Agent]
-      summary: Obtenir un lien de téléchargement signé pour un modèle
+      summary: Obtenir le lien de téléchargement d'un modèle et son empreinte
+      description: Les fichiers des modèles ouverts sont publics ; l'agent les télécharge directement, sans passer par le serveur.
       operationId: getModelDownload
       security: [{ agentToken: [] }]
       parameters:

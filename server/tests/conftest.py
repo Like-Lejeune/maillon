@@ -35,7 +35,7 @@ async def running_app():
 @pytest_asyncio.fixture(autouse=True)
 async def clean_state(running_app):
     async with running_app.state.engine.begin() as connection:
-        await connection.execute(text("TRUNCATE users, api_keys, machines, models, jobs, ledger_entries, balances RESTART IDENTITY CASCADE"))
+        await connection.execute(text("TRUNCATE users, api_keys, machines, models, jobs, job_attempts, machine_models, ledger_entries, balances RESTART IDENTITY CASCADE"))
     await running_app.state.redis.flushdb()
     yield
 

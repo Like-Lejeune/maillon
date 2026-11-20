@@ -8,6 +8,10 @@ Deux façons de le lancer, choisies par MAILLON_ENGINE (« auto » par défaut) 
   ghcr.io/ggml-org/llama.cpp:server-cuda), qui demande le NVIDIA Container Toolkit.
 « auto » prend le binaire s'il existe, sinon Docker.
 
+MAILLON_LLAMA_ARGS ajoute des options à llama-server, par exemple pour régler la
+« réflexion » de certains modèles. Les options d'adresse, de port et de modèle
+restent fixées par l'agent.
+
 llama-server n'écoute que sur 127.0.0.1 : rien n'est exposé sur le réseau.
 """
 
@@ -16,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -50,6 +55,18 @@ def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+_RESERVED = {"-m", "--model", "--host", "--port", "-hf", "--hf-repo", "--api-key"}
+
+
+def extra_args() -> list[str]:
+    """Options supplémentaires de MAILLON_LLAMA_ARGS, sans celles que l'agent fixe lui-même."""
+    args = shlex.split(os.environ.get("MAILLON_LLAMA_ARGS", ""), posix=os.name != "nt")
+    for arg in args:
+        if arg.split("=", 1)[0] in _RESERVED:
+            raise EngineError("runtime_error", f"Option interdite dans MAILLON_LLAMA_ARGS : {arg}", retryable=False)
+    return args
 
 
 def detect_mode() -> tuple[str, str] | None:
@@ -134,7 +151,8 @@ class LlamaEngine:
             )
         mode, executable = found
         self._port = _free_port()
-        common = ["--host", "127.0.0.1", "--port", str(self._port), "-c", str(self.context), "-ngl", "999"]
+        extra = extra_args()
+        common = ["--host", "127.0.0.1", "--port", str(self._port), "-c", str(self.context), "-ngl", "999", *extra]
         if mode == "binary":
             command = [executable, "-m", str(model_file), *common]
         else:
@@ -145,7 +163,7 @@ class LlamaEngine:
                 "-v", f"{self.models_dir.resolve()}:/models:ro",
                 "-p", f"127.0.0.1:{self._port}:8080",
                 image, "-m", f"/models/{model_file.name}",
-                "--host", "0.0.0.0", "--port", "8080", "-c", str(self.context), "-ngl", "999",
+                "--host", "0.0.0.0", "--port", "8080", "-c", str(self.context), "-ngl", "999", *extra,
             ]
         logger.info("Chargement du modèle %s (moteur : %s)…", slug, mode)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)

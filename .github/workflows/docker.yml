@@ -1,0 +1,47 @@
+name: Pile Docker locale
+
+# Construit l'image du serveur et démarre infra/docker-compose.dev.yml, comme le
+# fera la procédure du test de bout en bout (docs/test-jalon-21.md, option A).
+on:
+  pull_request:
+    paths: ["server/**", "infra/**", ".github/workflows/docker.yml"]
+  push:
+    branches: [develop]
+    paths: ["server/**", "infra/**"]
+
+jobs:
+  stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construire et démarrer la pile
+        run: docker compose -f infra/docker-compose.dev.yml up -d --build
+
+      - name: Attendre le serveur
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/health; then echo; exit 0; fi
+            sleep 2
+          done
+          docker compose -f infra/docker-compose.dev.yml logs server
+          exit 1
+
+      - name: Préparer un test (comptes, machine, clé)
+        run: python3 infra/demo/preparer_test.py --server http://localhost:8000 > /dev/null
+
+      - name: Ajouter un modèle au catalogue
+        run: |
+          docker compose -f infra/docker-compose.dev.yml exec -T server python -m app.cli add-model test-ci \
+            --name "Test CI" --url https://exemple.com/m.gguf --sha256 $(printf 'a%.0s' $(seq 64)) \
+            --size 1000 --min-vram 7000 --price-input 1 --price-output 1
+          curl -fsS http://localhost:8000/health
+
+      - name: Journaux en cas d'échec
+        if: failure()
+        run: docker compose -f infra/docker-compose.dev.yml logs
+
+      - name: Arrêter
+        if: always()
+        run: docker compose -f infra/docker-compose.dev.yml down -v

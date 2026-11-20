@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     job_timeout_seconds: int = 120  # délai maximal d'une tâche une fois attribuée
     queue_wait_seconds: int = 20  # attente d'une machine libre avant de répondre 503
     job_ack_seconds: int = 5  # délai pour que l'agent accuse réception
+    job_max_attempts: int = 3  # essais au plus, sur des machines différentes
 
     def _database_url(self, driver: str) -> str:
         password = quote(self.db_password, safe="")

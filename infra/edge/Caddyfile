@@ -1,0 +1,58 @@
+{
+	email {$ACME_EMAIL}
+}
+
+(securite) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	encode zstd gzip
+}
+
+# Routes servies par le serveur : API clients, API plateforme, canal des agents
+# (WebSocket) et contrôles de santé. Tout le reste est l'interface web.
+(routes_serveur) {
+	@serveur path /v1/* /api/* /agent/* /health /health/*
+}
+
+# Préproduction : API et interface sur le même domaine.
+{$STAGING_DOMAIN} {
+	import securite
+	import routes_serveur
+	handle @serveur {
+		reverse_proxy maillon-staging-server:8000 {
+			flush_interval -1
+		}
+	}
+	handle {
+		root * /srv/web/staging
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# Production : API des clients et des agents.
+{$API_DOMAIN} {
+	import securite
+	reverse_proxy maillon-production-server:8000 {
+		flush_interval -1
+	}
+}
+
+# Production : interface web. Ses appels /api/* sont relayés au serveur.
+{$APP_DOMAIN} {
+	import securite
+	@api path /api/*
+	handle @api {
+		reverse_proxy maillon-production-server:8000
+	}
+	handle {
+		root * /srv/web/production
+		try_files {path} /index.html
+		file_server
+	}
+}
